@@ -11,6 +11,7 @@
 #if !defined(_XOPEN_SOURCE)
 #define _XOPEN_SOURCE 600
 #endif
+#include <array>
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -19,10 +20,15 @@
 
 #define SAMPLE_FREQUENCY 48000
 #define STREAM_FORMAT CUBEB_SAMPLE_FLOAT32LE
+#define DELAY_SECONDS 2.0
+
+static std::array<float, static_cast<size_t>(SAMPLE_FREQUENCY * DELAY_SECONDS * 0.5)> recorded_frames;
 
 struct user_state_duplex
 {
   bool seen_audio;
+  size_t num_frames_processed;
+  bool playing_back;
 };
 
 long data_cb_duplex(cubeb_stream * stream, void * user, const void * inputbuffer, void * outputbuffer, long nframes)
@@ -30,25 +36,35 @@ long data_cb_duplex(cubeb_stream * stream, void * user, const void * inputbuffer
   user_state_duplex * u = reinterpret_cast<user_state_duplex*>(user);
   float *ib = (float *)inputbuffer;
   float *ob = (float *)outputbuffer;
-  bool seen_audio = true;
 
   if (stream == NULL || inputbuffer == NULL || outputbuffer == NULL) {
     return CUBEB_ERROR;
   }
 
-  // Loop back: upmix the single input channel to the two output channels,
-  // checking if there is noise in the process.
-  long output_index = 0;
-  for (long i = 0; i < nframes; i++) {
-    if (ib[i] <= -1.0 && ib[i] >= 1.0) {
-      seen_audio = false;
-      break;
+  if (u->playing_back) {
+    for (long i = 0; i < nframes; i++, u->num_frames_processed++) {
+      float sample = u->num_frames_processed < recorded_frames.size()
+                     ? recorded_frames[u->num_frames_processed] : 0;
+      ob[i * 2] = ob[i * 2 + 1] = sample;
     }
-    ob[output_index] = ob[output_index + 1] = ib[i];
-    output_index += 2;
+  } else {
+    bool seen_audio = true;
+    for (long i = 0; i < nframes; i++, u->num_frames_processed++) {
+      if (ib[i] <= -1.0 && ib[i] >= 1.0) {
+        seen_audio = false;
+        break;
+      }
+      if (u->num_frames_processed < recorded_frames.size()) {
+        recorded_frames[u->num_frames_processed] = ib[i];
+      }
+      ob[i * 2] = ob[i * 2 + 1] = 0;
+    }
+    u->seen_audio |= seen_audio;
+    if (u->num_frames_processed >= recorded_frames.size()) {
+      u->num_frames_processed = 0;
+      u->playing_back = true;
+    }
   }
-
-  u->seen_audio |= seen_audio;
 
   return nframes;
 }
@@ -79,7 +95,7 @@ TEST(cubeb, duplex)
   cubeb_stream_params input_params;
   cubeb_stream_params output_params;
   int r;
-  user_state_duplex stream_state = { false };
+  user_state_duplex stream_state = { false, 0, false };
   uint32_t latency_frames = 0;
 
   r = cubeb_init(&ctx, "Cubeb duplex example", NULL);
@@ -120,7 +136,7 @@ TEST(cubeb, duplex)
   }
 
   cubeb_stream_start(stream);
-  delay(500);
+  delay(DELAY_SECONDS * 1000);
   cubeb_stream_stop(stream);
 
   cubeb_stream_destroy(stream);
