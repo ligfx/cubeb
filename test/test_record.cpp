@@ -18,10 +18,12 @@
 
 #define SAMPLE_FREQUENCY 48000
 #define STREAM_FORMAT CUBEB_SAMPLE_FLOAT32LE
+#define DELAY_SECONDS 0.5
 
 struct user_state_record
 {
   bool seen_audio;
+  int num_seen_frames;
 };
 
 long data_cb_record(cubeb_stream * stream, void * user, const void * inputbuffer, void * outputbuffer, long nframes)
@@ -32,6 +34,8 @@ long data_cb_record(cubeb_stream * stream, void * user, const void * inputbuffer
   if (stream == NULL  || inputbuffer == NULL || outputbuffer != NULL) {
     return CUBEB_ERROR;
   }
+
+  u->num_seen_frames += nframes;
 
   bool seen_audio = true;
   for (long i = 0; i < nframes; i++) {
@@ -74,7 +78,7 @@ TEST(cubeb, record)
   cubeb_stream *stream;
   cubeb_stream_params params;
   int r;
-  user_state_record stream_state = { false };
+  user_state_record stream_state = { false, 0 };
 
   r = cubeb_init(&ctx, "Cubeb record example", NULL);
   if (r != CUBEB_OK) {
@@ -101,11 +105,15 @@ TEST(cubeb, record)
   }
 
   cubeb_stream_start(stream);
-  delay(500);
+  delay(DELAY_SECONDS * 1000);
   cubeb_stream_stop(stream);
 
   cubeb_stream_destroy(stream);
   cubeb_destroy(ctx);
+
+  EXPECT_GT(stream_state.num_seen_frames, DELAY_SECONDS * SAMPLE_FREQUENCY * 0.75);
+  printf("saw %i frames / %f seconds of audio)\n", stream_state.num_seen_frames,
+         static_cast<float>(stream_state.num_seen_frames) / SAMPLE_FREQUENCY);
 
 #ifdef __linux__
   // user callback does not arrive in Linux, silence the error
