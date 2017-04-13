@@ -681,6 +681,9 @@ opensl_init(cubeb ** context, char const * context_name)
 
   ctx->lib = dlopen("libOpenSLES.so", RTLD_LAZY);
   ctx->libmedia = dlopen("libmedia.so", RTLD_LAZY);
+  if (!ctx->libmedia) {
+    ctx->libmedia = dlopen(NULL, RTLD_LAZY);
+  }
   if (!ctx->lib || !ctx->libmedia) {
     free(ctx);
     return CUBEB_ERROR;
@@ -803,30 +806,28 @@ opensl_get_preferred_sample_rate(cubeb * ctx, uint32_t * rate)
    * We don't want to deal with JNI here (and we don't have Java on b2g anyways),
    * so we just dlopen the library and get the two symbols we need. */
   int r;
-  void * libmedia;
   uint32_t (*get_primary_output_samplingrate)();
   uint32_t (*get_output_samplingrate)(int * samplingRate, int streamType);
 
-  libmedia = dlopen("libmedia.so", RTLD_LAZY);
-  if (!libmedia) {
+  if (!ctx->libmedia) {
     return CUBEB_ERROR;
   }
 
   /* uint32_t AudioSystem::getPrimaryOutputSamplingRate(void) */
   get_primary_output_samplingrate =
-    dlsym(libmedia, "_ZN7android11AudioSystem28getPrimaryOutputSamplingRateEv");
+    dlsym(ctx->libmedia, "_ZN7android11AudioSystem28getPrimaryOutputSamplingRateEv");
   if (!get_primary_output_samplingrate) {
     /* fallback to
      * status_t AudioSystem::getOutputSamplingRate(int* samplingRate, int streamType)
      * if we cannot find getPrimaryOutputSamplingRate. */
     get_output_samplingrate =
-      dlsym(libmedia, "_ZN7android11AudioSystem21getOutputSamplingRateEPj19audio_stream_type_t");
+      dlsym(ctx->libmedia, "_ZN7android11AudioSystem21getOutputSamplingRateEPj19audio_stream_type_t");
     if (!get_output_samplingrate) {
       /* Another signature exists, with a int instead of an audio_stream_type_t */
       get_output_samplingrate =
-        dlsym(libmedia, "_ZN7android11AudioSystem21getOutputSamplingRateEPii");
+        dlsym(ctx->libmedia, "_ZN7android11AudioSystem21getOutputSamplingRateEPii");
       if (!get_output_samplingrate) {
-        dlclose(libmedia);
+        dlclose(ctx->libmedia);
         return CUBEB_ERROR;
       }
     }
@@ -838,12 +839,9 @@ opensl_get_preferred_sample_rate(cubeb * ctx, uint32_t * rate)
     /* We don't really know about the type, here, so we just pass music. */
     r = get_output_samplingrate((int *) rate, AUDIO_STREAM_TYPE_MUSIC);
     if (r) {
-      dlclose(libmedia);
       return CUBEB_ERROR;
     }
   }
-
-  dlclose(libmedia);
 
   /* Depending on which method we called above, we can get a zero back, yet have
    * a non-error return value, especially if the audio system is not
@@ -864,7 +862,6 @@ opensl_get_min_latency(cubeb * ctx, cubeb_stream_params params, uint32_t * laten
    * so we just dlopen the library and get the two symbols we need. */
 
   int r;
-  void * libmedia;
   size_t (*get_primary_output_frame_count)(void);
   int (*get_output_frame_count)(size_t * frameCount, int streamType);
   uint32_t primary_sampling_rate;
@@ -876,22 +873,20 @@ opensl_get_min_latency(cubeb * ctx, cubeb_stream_params params, uint32_t * laten
     return CUBEB_ERROR;
   }
 
-  libmedia = dlopen("libmedia.so", RTLD_LAZY);
-  if (!libmedia) {
+  if (!ctx->libmedia) {
     return CUBEB_ERROR;
   }
 
   /* JB variant */
   /* size_t AudioSystem::getPrimaryOutputFrameCount(void) */
   get_primary_output_frame_count =
-    dlsym(libmedia, "_ZN7android11AudioSystem26getPrimaryOutputFrameCountEv");
+    dlsym(ctx->libmedia, "_ZN7android11AudioSystem26getPrimaryOutputFrameCountEv");
   if (!get_primary_output_frame_count) {
     /* ICS variant */
     /* status_t AudioSystem::getOutputFrameCount(int* frameCount, int streamType) */
     get_output_frame_count =
-      dlsym(libmedia, "_ZN7android11AudioSystem19getOutputFrameCountEPii");
+      dlsym(ctx->libmedia, "_ZN7android11AudioSystem19getOutputFrameCountEPii");
     if (!get_output_frame_count) {
-      dlclose(libmedia);
       return CUBEB_ERROR;
     }
   }
@@ -908,8 +903,6 @@ opensl_get_min_latency(cubeb * ctx, cubeb_stream_params params, uint32_t * laten
    * samplerate, which is device dependant. Some devices might be able to
    * resample when playing a fast track, but it's pretty rare. */
   *latency_frames = primary_buffer_size;
-
-  dlclose(libmedia);
 
   return CUBEB_OK;
 }
